@@ -429,8 +429,54 @@ def render_field(label: str, value, confidence: str):
 # App
 # ---------------------------------------------------------------------------
 
-st.title("Manifest")
-st.caption("Upload any business document — Claude extracts structured data with per-field confidence.")
+st.markdown("""
+<style>
+/* Hide Streamlit chrome */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding-top: 2rem; max-width: 860px; }
+
+/* Upload box */
+[data-testid="stFileUploader"] {
+    border: 2px dashed #3f3f46;
+    border-radius: 16px;
+    padding: 2rem;
+    background: #111113;
+    transition: border-color 0.2s;
+}
+[data-testid="stFileUploader"]:hover { border-color: #a78bfa; }
+
+/* Buttons */
+[data-testid="stDownloadButton"] button {
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.02em !important;
+}
+
+/* Sidebar */
+[data-testid="stSidebar"] { background: #0d0d0f; border-right: 1px solid #1f1f23; }
+
+/* Divider */
+hr { border-color: #1f1f23 !important; }
+
+/* Spinner text */
+[data-testid="stSpinner"] p { color: #a78bfa; }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("## Manifest")
+st.markdown(
+    '<p style="color:#71717a;font-size:15px;margin-top:-12px;margin-bottom:8px;">'
+    'Upload any business document — Claude extracts structured data with per-field confidence.'
+    '</p>',
+    unsafe_allow_html=True
+)
+st.markdown(
+    '<p style="color:#52525b;font-size:12px;padding:8px 14px;background:#111113;'
+    'border:1px solid #1f1f23;border-radius:8px;display:inline-block;margin-bottom:1.5rem;">'
+    '🔒 Your document is processed and immediately deleted — never stored, never shared.'
+    '</p>',
+    unsafe_allow_html=True
+)
 
 if not ANTHROPIC_API_KEY:
     st.error("ANTHROPIC_API_KEY not set.")
@@ -481,7 +527,13 @@ if uploaded:
             st.error(f"Extraction failed: {e}")
             st.stop()
 
+    from datetime import datetime as dt
+    ts = dt.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     st.success(f"Extracted from **{uploaded.name}**")
+    st.markdown(
+        f'<p style="color:#52525b;font-size:11px;">Document processed and deleted at {ts}</p>',
+        unsafe_allow_html=True
+    )
     st.divider()
 
     cfg = DOCUMENT_TYPES[doc_type]
