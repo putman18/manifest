@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manifest — AI Document Extraction</title>
+  <meta name="description" content="Upload any business document. Claude extracts structured data with per-field confidence." />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<div class="wrap">
+
+  <nav>
+    <span class="nav-brand">Manifest</span>
+    <span class="nav-privacy">Your document is processed and immediately deleted — never stored or shared.</span>
+  </nav>
+
+  <!-- Upload panel -->
+  <div class="upload-panel" id="upload-panel">
+    <div class="doc-types" id="doc-types">
+      <button class="doc-type-btn active" data-type="invoice">Invoice</button>
+      <button class="doc-type-btn" data-type="purchase_order">Purchase Order</button>
+      <button class="doc-type-btn" data-type="contract">Contract</button>
+      <button class="doc-type-btn" data-type="receipt">Receipt</button>
+      <button class="doc-type-btn" data-type="job_application">Job Application</button>
+    </div>
+
+    <div class="drop-zone" id="drop-zone">
+      <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg" />
+      <div class="drop-icon">📄</div>
+      <div class="drop-title">Drop your document here</div>
+      <div class="drop-sub">PDF, PNG, or JPG — up to 20MB</div>
+    </div>
+
+    <a class="sample-link" id="sample-link">Download a sample invoice to try →</a>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div class="loading-step" id="loading-step">Reading document...</div>
+  </div>
+
+  <!-- Results -->
+  <div id="results">
+
+    <div class="result-header">
+      <div>
+        <div class="result-title">Extracted from</div>
+        <div class="result-filename" id="result-filename">—</div>
+      </div>
+      <button class="reset-btn" id="reset-btn">Upload another</button>
+    </div>
+
+    <div class="summary-banner" id="summary-banner"></div>
+
+    <div class="fields-grid" id="fields-grid"></div>
+
+    <div id="array-sections"></div>
+
+    <div class="exports">
+      <button class="export-btn" id="export-json">
+        <span class="icon">{ }</span>
+        JSON
+      </button>
+      <button class="export-btn" id="export-csv">
+        <span class="icon">📊</span>
+        CSV
+      </button>
+      <button class="export-btn" id="export-email">
+        <span class="icon">✉️</span>
+        Email Draft
+      </button>
+      <button class="export-btn" id="export-pdf">
+        <span class="icon">📋</span>
+        PDF Summary
+      </button>
+    </div>
+
+    <div class="timestamp" id="timestamp"></div>
+  </div>
+
+  <footer>
+    Manifest · AI document extraction · Documents deleted after processing
+  </footer>
+
+</div>
+
+<script>
+  let currentDocType = "invoice";
+  let currentResult  = null;
+  let currentPayload = null;
+
+  const CONFIDENCE_LABELS = {
+    high:    "Looks good",
+    medium:  "Double-check",
+    low:     "Verify before using",
+    missing: "Not found",
+  };
+
+  // Doc type selector
+  document.querySelectorAll(".doc-type-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".doc-type-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentDocType = btn.dataset.type;
+    });
+  });
+
+  // Drag and drop
+  const dropZone = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-input");
+
+  dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+
+  // Sample invoice
+  document.getElementById("sample-link").addEventListener("click", () => {
+    window.location.href = "/sample-invoice";
+  });
+
+  // Reset
+  document.getElementById("reset-btn").addEventListener("click", () => {
+    document.getElementById("results").classList.remove("active");
+    document.getElementById("upload-panel").style.display = "";
+    fileInput.value = "";
+    currentResult = null;
+    currentPayload = null;
+  });
+
+  // Upload + extract
+  async function handleFile(file) {
+    document.getElementById("upload-panel").style.display = "none";
+    showLoading("Reading document...");
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("doc_type", currentDocType);
+
+    try {
+      await delay(400);
+      setLoadingStep("Extracting fields with Claude...");
+
+      const resp = await fetch("/extract", { method: "POST", body: form });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || "Extraction failed");
+      }
+
+      await delay(300);
+      setLoadingStep("Building results...");
+      await delay(200);
+
+      const data = await resp.json();
+      currentPayload = data;
+      currentResult  = data.result;
+
+      renderResults(data);
+    } catch (err) {
+      hideLoading();
+      document.getElementById("upload-panel").style.display = "";
+      alert("Error: " + err.message);
+    }
+  }
+
+  function renderResults(data) {
+    hideLoading();
+
+    // Header
+    document.getElementById("result-filename").textContent = data.filename;
+
+    // Summary banner
+    const banner = document.getElementById("summary-banner");
+    const allGood = !data.summary.includes("need") && !data.summary.includes("not found") && !data.summary.includes("should");
+    banner.textContent = data.summary;
+    banner.className = "summary-banner " + (allGood ? "all-good" : "has-issues");
+
+    // Scalar fields
+    const grid = document.getElementById("fields-grid");
+    grid.innerHTML = "";
+    for (const [key, label] of Object.entries(data.fields)) {
+      if (data.array_fields.includes(key)) continue;
+      const fd   = data.result[key] || {};
+      const val  = fd.value;
+      const conf = val !== null && val !== undefined ? (fd.confidence || "high") : "missing";
+      grid.appendChild(makeFieldCard(label, val, conf));
+    }
+
+    // Array sections
+    const arraySec = document.getElementById("array-sections");
+    arraySec.innerHTML = "";
+    for (const key of data.array_fields) {
+      const fd    = data.result[key] || {};
+      const items = fd.value || [];
+      const label = data.fields[key] || key;
+      arraySec.appendChild(makeArraySection(label, items));
+    }
+
+    // Timestamp
+    document.getElementById("timestamp").textContent =
+      `Document processed and deleted · ${data.timestamp}`;
+
+    document.getElementById("results").classList.add("active");
+  }
+
+  function makeFieldCard(label, value, confidence) {
+    const card = document.createElement("div");
+    card.className = `field-card ${confidence}`;
+
+    const displayVal = (value !== null && value !== undefined && value !== "")
+      ? String(value) : "Not found";
+    const isEmpty = displayVal === "Not found";
+
+    card.innerHTML = `
+      <div class="field-label">${label}</div>
+      <div class="field-value ${isEmpty ? "empty" : ""}">${displayVal}</div>
+      <span class="confidence-pill ${confidence}">
+        <span class="confidence-dot"></span>
+        ${CONFIDENCE_LABELS[confidence] || confidence}
+      </span>
+    `;
+    return card;
+  }
+
+  function makeArraySection(label, items) {
+    const sec = document.createElement("div");
+    sec.className = "array-section";
+    sec.innerHTML = `<div class="array-section-title">${label}</div>`;
+
+    if (!items || items.length === 0) {
+      sec.innerHTML += `<div style="color:var(--muted);font-size:13px;">None found.</div>`;
+      return sec;
+    }
+
+    if (typeof items[0] === "object") {
+      // Table
+      const headers = Object.keys(items[0]);
+      let html = `<table><thead><tr>${headers.map(h => `<th>${h.replace(/_/g," ")}</th>`).join("")}</tr></thead><tbody>`;
+      for (const row of items) {
+        html += `<tr>${headers.map(h => `<td>${row[h] ?? "—"}</td>`).join("")}</tr>`;
+      }
+      html += `</tbody></table>`;
+      sec.innerHTML += html;
+    } else {
+      // Pills or list
+      const isTags = items.length > 3 && items.every(i => String(i).length < 30);
+      if (isTags) {
+        const tags = items.map(i => `<span class="tag">${i}</span>`).join("");
+        sec.innerHTML += `<div class="tags-list">${tags}</div>`;
+      } else {
+        const lis = items.map(i => `<li>${i}</li>`).join("");
+        sec.innerHTML += `<ul class="list-items">${lis}</ul>`;
+      }
+    }
+    return sec;
+  }
+
+  // Exports
+  document.getElementById("export-json").addEventListener("click", () => {
+    if (!currentResult) return;
+    download(JSON.stringify(currentResult, null, 2), stem() + ".json", "application/json");
+  });
+
+  document.getElementById("export-csv").addEventListener("click", async () => {
+    if (!currentPayload) return;
+    await postExport("/export/csv", stem() + ".csv", "text/csv");
+  });
+
+  document.getElementById("export-email").addEventListener("click", async () => {
+    if (!currentPayload) return;
+    await postExport("/export/email", stem() + "_email.txt", "text/plain");
+  });
+
+  document.getElementById("export-pdf").addEventListener("click", async () => {
+    if (!currentPayload) return;
+    await postExport("/export/pdf", stem() + "_summary.pdf", "application/pdf");
+  });
+
+  async function postExport(url, filename, mime) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentPayload),
+    });
+    if (!resp.ok) { alert("Export failed"); return; }
+    const blob = await resp.blob();
+    download(blob, filename, mime);
+  }
+
+  function download(content, filename, mime) {
+    const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([content], { type: mime }));
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function stem() {
+    return (currentPayload?.filename || "extracted").replace(/\.[^.]+$/, "");
+  }
+
+  // Loading helpers
+  function showLoading(step) {
+    document.getElementById("loading").classList.add("active");
+    document.getElementById("loading-step").textContent = step;
+  }
+  function setLoadingStep(step) {
+    document.getElementById("loading-step").textContent = step;
+  }
+  function hideLoading() {
+    document.getElementById("loading").classList.remove("active");
+  }
+  function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+
+</body>
+</html>
